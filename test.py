@@ -9,7 +9,7 @@ import time
 # ==========================================
 st.set_page_config(page_title="解码战 Online", page_icon="📡", layout="wide")
 
-# 注入自定义字体 CSS (保持你的字体设置)
+# 注入自定义字体 CSS
 st.markdown("""
     <style>
     @import url("https://fontsapi.zeoseven.com/881/main/result.css");
@@ -28,51 +28,44 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 DATA_FILE = "online_rooms.json"
-WORD_FILE = "word_sets.txt"  # <--- 指定你的词库文件名
+WORD_FILE = "word_sets.txt"
 
 # ==========================================
-# 2. 词库读取逻辑 (新增)
+# 2. 词库读取逻辑 (改为真正的全池随机)
 # ==========================================
-@st.cache_data # 使用缓存，避免每次刷新都重新读文件
+@st.cache_data
 def load_word_pool():
     """
-    尝试从 txt 文件读取词库。
-    忽略 [难度] 标签，将所有符合格式的词组混入一个大池子。
+    读取词库文件。
+    返回格式：{"简单": [词1, 词2...], "中等": [...], "困难": [...]}
     """
-    pool = []
+    data = {}
+    current_difficulty = None
     
-    # 1. 尝试读取文件
     if os.path.exists(WORD_FILE):
         try:
             with open(WORD_FILE, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    # 跳过空行和 [标签]
-                    if not line or (line.startswith("[") and line.endswith("]")):
-                        continue
+                    if not line: continue
                     
-                    # 处理中文逗号
-                    line = line.replace("，", ",")
-                    words = line.split(",")
-                    
-                    # 只有当这一行确实有词时才加入
-                    if len(words) >= 4: 
-                        # 取前4个词重新组合，确保干净
-                        clean_line = ",".join([w.strip() for w in words[:4]])
-                        pool.append(clean_line)
+                    # 识别难度标签
+                    if line.startswith("[") and line.endswith("]"):
+                        current_difficulty = line[1:-1]
+                        if current_difficulty not in data:
+                            data[current_difficulty] = []
+                    elif current_difficulty:
+                        # 兼容中文逗号，分割所有词
+                        line = line.replace("，", ",")
+                        words = line.split(",")
+                        for w in words:
+                            w = w.strip()
+                            if w: # 只要不是空字符串就加入大池子
+                                data[current_difficulty].append(w)
         except Exception as e:
             st.error(f"读取词库文件出错: {e}")
-    
-    # 2. 如果文件不存在或没读到词，使用内置兜底数据
-    if not pool:
-        pool = [
-            "苹果,香蕉,西瓜,葡萄", "猫,狗,兔子,鸟", "桌子,椅子,床,沙发",
-            "红色,蓝色,绿色,黄色", "眼睛,鼻子,嘴巴,耳朵", "爸爸,妈妈,爷爷,奶奶",
-            "水,牛奶,果汁,可乐", "太阳,月亮,星星,云", "铅笔,橡皮,书,纸",
-            "汽车,火车,飞机,船", "手机,电脑,电视,相机", "夏天,冬天,春天,秋天"
-        ]
-    
-    return pool
+            
+    return data
 
 # ==========================================
 # 3. 数据库读写函数
@@ -102,13 +95,14 @@ def update_room(room_id, room_data):
 # ==========================================
 # 4. 游戏逻辑函数
 # ==========================================
-def create_room(room_id, player_name):
+def create_room(room_id, player_name, difficulty):
     data = load_data()
     if room_id in data:
         return False, "房间已存在，请直接加入"
     
     data[room_id] = {
         "players": [player_name],
+        "difficulty": difficulty, # 记录房间难度
         "status": "WAITING",
         "teams": {},
         "roles": {},
@@ -154,19 +148,25 @@ def start_game_logic(room_id):
     room["roles"][players[2]] = "加密员"
     room["roles"][players[3]] = "解密员"
     
-    # --- 修改处：使用加载的词库 ---
-    full_pool = load_word_pool() # 调用读取函数
-    if len(full_pool) < 2:
-        # 防止词库太小崩坏
-        raw_words = ["词库不足,请检查,文件,内容", "错误,词汇,数量,过少"]
-    else:
-        raw_words = random.sample(full_pool, 2)
+    # --- 核心修改：从全量池中随机抽取8个 ---
+    full_data = load_word_pool()
+    diff = room.get("difficulty", "简单")
+    
+    # 获取对应难度的所有词（大池子）
+    pool = full_data.get(diff, [])
+    
+    # 兜底逻辑：如果词库读不到或太少，用默认词
+    if len(pool) < 8:
+        pool = ["苹果","香蕉","西瓜","葡萄","猫","狗","兔子","鸟"] * 2 
         
-    room["words"]["黑队"] = raw_words[0].split(",")
-    room["words"]["白队"] = raw_words[1].split(",")
+    # 真正的随机：从池子里抓8个不重复的
+    chosen_8 = random.sample(pool, 8)
+    
+    room["words"]["黑队"] = chosen_8[:4]
+    room["words"]["白队"] = chosen_8[4:]
     
     room["status"] = "PLAYING"
-    room["logs"].append("游戏开始！系统已随机分队。")
+    room["logs"].append(f"游戏开始！难度：{diff}。系统已随机分队。")
     update_room(room_id, room)
 
 def rotate_roles(room_id):
@@ -193,10 +193,13 @@ with st.sidebar:
     my_name = st.text_input("输入你的昵称", key="my_name_input")
     room_code = st.text_input("房间号 (如 8888)", key="room_code_input")
     
+    # 新增：难度选择
+    selected_diff = st.selectbox("选择难度 (仅创建时有效)", ["简单", "中等", "困难"])
+    
     col1, col2 = st.columns(2)
     if col1.button("创建房间"):
         if my_name and room_code:
-            success, msg = create_room(room_code, my_name)
+            success, msg = create_room(room_code, my_name, selected_diff)
             if success:
                 st.session_state.room_id = room_code
                 st.session_state.my_name = my_name
@@ -219,10 +222,10 @@ with st.sidebar:
     st.markdown("---")
     st.caption("提示：在手机上，点击左上角箭头可收起此栏。")
     
-    # 调试用：显示词库加载状态
-    st.markdown("---")
-    pool_size = len(load_word_pool())
-    st.caption(f"📚 当前词库载入: {pool_size} 组")
+    # 调试信息：显示词库词汇量
+    all_words = load_word_pool()
+    count = len(all_words.get(selected_diff, []))
+    st.caption(f"📚 {selected_diff}模式词汇量: {count} 个")
 
 # --- 主逻辑 ---
 
@@ -232,7 +235,7 @@ if not st.session_state.room_id:
     st.info("👈 手机端请点左上角箭头 >")
     st.stop()
 
-# --- 全局刷新按钮 ---
+# 全局刷新按钮
 if st.button("🔄 点我刷新最新状态 (查看对手行动)", type="primary", use_container_width=True):
     st.rerun()
 
@@ -252,6 +255,7 @@ opponent_team = "白队" if my_team == "黑队" else "黑队"
 # --- 等待大厅 ---
 if room["status"] == "WAITING":
     st.header(f"🏠 房间：{st.session_state.room_id}")
+    st.caption(f"当前难度：{room.get('difficulty', '简单')}")
     st.write("等待玩家加入...")
     
     cols = st.columns(4)
