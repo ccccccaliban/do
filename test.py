@@ -3,7 +3,7 @@ import random
 import json
 import os
 import time
-import datetime  # 新增：用于显示同步时间
+import datetime
 
 # ==========================================
 # 1. 基础配置与字体设置
@@ -24,7 +24,7 @@ st.markdown("""
     .stButton button {
         font-weight: bold;
     }
-    /* 隐藏右上角运行状态图标，减少干扰 */
+    /* 隐藏右上角运行状态图标 */
     .stStatusWidget {
         visibility: hidden;
     }
@@ -75,7 +75,6 @@ def load_data():
         return {}
 
 def save_data(data):
-    # 简单的文件写入锁机制，防止多人同时写入冲突
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
@@ -147,7 +146,6 @@ def start_game_logic(room_id):
     room["roles"][players[2]] = "加密员"
     room["roles"][players[3]] = "解密员"
     
-    # 随机抽词逻辑
     full_data = load_word_pool()
     diff = room.get("difficulty", "简单")
     pool = full_data.get(diff, [])
@@ -174,14 +172,11 @@ def rotate_roles(room_id):
 # 5. 核心：自动刷新的游戏区域
 # ==========================================
 
-# ⚠️ 这里是实现自动同步的关键！
-# run_every=2 表示每2秒自动重新运行一次这个函数，检查最新数据
 @st.fragment(run_every=2)
 def render_game_area():
     if not st.session_state.room_id:
         return
 
-    # 每次运行时重新从文件读取最新数据
     room = get_room(st.session_state.room_id)
     
     if not room:
@@ -196,7 +191,6 @@ def render_game_area():
     my_role = room.get("roles", {}).get(me, "观众")
     opponent_team = "白队" if my_team == "黑队" else "黑队"
     
-    # 心跳显示（证明自动刷新在工作）
     current_time = datetime.datetime.now().strftime('%H:%M:%S')
     st.caption(f"⚡ 实时同步中 | 最后更新: {current_time}")
 
@@ -205,7 +199,6 @@ def render_game_area():
         st.header(f"🏠 房间：{st.session_state.room_id}")
         st.caption(f"当前难度：{room.get('difficulty', '简单')}")
         
-        # 自动刷新显示新加入的玩家
         cols = st.columns(4)
         for i, p in enumerate(room["players"]):
             cols[i].success(f"👤 {p}")
@@ -311,13 +304,17 @@ def render_game_area():
                     if st.form_submit_button("提交验证", use_container_width=True):
                         guess = [int(c) for c in g_str if c.isdigit()]
                         real = room["current_code"]
+                        real_str = f"{real[0]}-{real[1]}-{real[2]}" # 格式化正确密码
+                        
                         if guess == real:
                             st.success("回答正确！")
-                            room["logs"].append(f"{me} 猜对了密码。")
+                            # --- 修改点：公开正确答案 ---
+                            room["logs"].append(f"✅ {me} 猜对了密码！(正确答案: 【{real_str}】)")
                         else:
                             room["score"][my_team]["f"] += 1
-                            st.error(f"回答错误！正确是 {real}")
-                            room["logs"].append(f"{me} 猜错密码 (正确: {real})，获得1黑币。")
+                            st.error(f"回答错误！正确是 {real_str}")
+                            # --- 修改点：猜错也要公开正确答案 ---
+                            room["logs"].append(f"❌ {me} 猜错密码... (猜测: {guess}, 正确答案: 【{real_str}】) - 获得1黑币")
                         
                         # 胜负判定
                         sc = room["score"]
@@ -347,7 +344,7 @@ def render_game_area():
         st.write("房间将保留最后状态。如需重玩请创建新房间。")
 
     st.divider()
-    with st.expander("📜 游戏日志 (自动更新)", expanded=True):
+    with st.expander("📜 游戏日志 (包含历史密码)", expanded=True):
         for log in reversed(room["logs"]):
             st.caption(log)
 
@@ -360,7 +357,7 @@ if "room_id" not in st.session_state:
 if "my_name" not in st.session_state:
     st.session_state.my_name = None
 
-# 侧边栏（不需要自动刷新）
+# 侧边栏
 with st.sidebar:
     st.title("📡 控制台")
     st.caption("创建或加入房间")
@@ -395,12 +392,11 @@ with st.sidebar:
     st.markdown("---")
     st.caption("提示：在手机上，点击左上角箭头可收起此栏。")
 
-# 主界面逻辑
+# 主界面
 if not st.session_state.room_id:
     st.title("🕵️ 解码战 Online")
     st.write("👋 请点击左上角箭头打开侧边栏，输入昵称和房间号。")
     st.info("👈 手机端请点左上角箭头 >")
 else:
     # 调用自动刷新的游戏区域
-    # 这一块代码会每2秒自动执行一次
     render_game_area()
